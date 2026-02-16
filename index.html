@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>台電全方位戰情中心 - 整合監控版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- 引入 Leaflet 地圖庫 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap');
+        
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f8fafc; color: #334155; -webkit-tap-highlight-color: transparent; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        
+        .light-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 1.5rem; box-shadow: 0 4px 20px -2px rgba(0,0,0,0.05); transition: all 0.3s ease; }
+        .light-card:hover { box-shadow: 0 10px 25px -3px rgba(0,0,0,0.08); border-color: #cbd5e1; }
+
+        /* 動態權重呼吸光暈動畫 */
+        .status-pulse { 
+            animation: pulse-dynamic 3s infinite ease-in-out; 
+            transform-origin: center;
+        }
+        @keyframes pulse-dynamic { 
+            0% { opacity: 0.15; transform: scale(0.9); } 
+            50% { opacity: 0.45; transform: scale(1.08); } 
+            100% { opacity: 0.15; transform: scale(0.9); } 
+        }
+
+        .table-container::-webkit-scrollbar { height: 6px; }
+        .table-container::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .table-container::-webkit-scrollbar-track { background: #f1f5f9; }
+
+        #initialLoaderOverlay {
+            position: fixed; inset: 0; z-index: 100;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(8px);
+            display: flex; align-items: center; justify-content: center;
+            transition: opacity 0.5s ease-out;
+        }
+
+        /* 錨點跳轉高亮邏輯 */
+        [id^="note-"] { scroll-margin-top: 6rem; transition: all 0.4s ease; }
+        :target { 
+            animation: highlight-pulse 2.5s ease-out; 
+            border: 2px solid #3b82f6 !important; 
+            background-color: #fefce8;
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+        }
+        @keyframes highlight-pulse { 
+            0% { background-color: #fef08a; transform: scale(1.01); } 
+            100% { background-color: #fefce8; transform: scale(1); } 
+        }
+
+        /* Leaflet Popup 優化 - 參考圖樣式 */
+        .leaflet-popup-content-wrapper { 
+            border-radius: 16px; 
+            padding: 0; 
+            overflow: hidden; 
+            box-shadow: 0 15px 35px -5px rgba(0, 0, 0, 0.2); 
+            border: 1px solid rgba(255,255,255,0.8);
+        }
+        .leaflet-popup-content { margin: 0 !important; width: 260px !important; }
+        .leaflet-popup-tip-container { display: none; } /* 移除箭頭以獲得更乾淨的卡片感 */
+        .leaflet-container a.leaflet-popup-close-button {
+            top: 10px; right: 10px; color: #94a3b8; font-size: 16px; font-weight: bold;
+        }
+
+        /* 收折動畫 */
+        .collapsible-content {
+            transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+            max-height: 2000px; overflow: hidden;
+        }
+        .collapsed .collapsible-content { max-height: 0 !important; opacity: 0; pointer-events: none; margin: 0 !important; padding: 0 !important; }
+        .toggle-icon { transition: transform 0.4s ease; }
+        .collapsed .toggle-icon { transform: rotate(180deg); }
+        
+        /* 官方說明樣式優化 */
+        .note-item {
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .note-item:last-child { border-bottom: none; }
+        .note-title { color: #1e293b; font-weight: 700; font-size: 0.8rem; margin-bottom: 0.25rem; display: block; }
+        .note-content { color: #64748b; font-size: 0.75rem; line-height: 1.6; text-align: justify; }
+    </style>
+</head>
+<body class="min-h-screen p-3 sm:p-6 pb-20">
+
+    <!-- Loading Overlay -->
+    <div id="initialLoaderOverlay">
+        <div class="text-center p-8 bg-white rounded-3xl shadow-2xl border border-slate-100 max-w-[90%] w-96 relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-emerald-500 animate-pulse"></div>
+            <div class="mb-5 flex justify-center">
+                <div class="relative">
+                    <div id="loaderSpinner" class="w-16 h-16 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div>
+                    <i data-lucide="zap" class="w-6 h-6 text-blue-600 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"></i>
+                </div>
+            </div>
+            <h2 class="text-xl font-black text-slate-800 mb-2 tracking-tight">戰情中心連線中...</h2>
+            <div class="space-y-1">
+                <p id="loaderStatus1" class="text-slate-400 text-xs font-mono">初始化地圖圖資...</p>
+                <p id="loaderStatus2" class="text-slate-400 text-xs font-mono">同步即時發電數據...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+        <div>
+            <div class="flex items-center gap-3">
+                <div class="p-2.5 bg-slate-900 rounded-xl shadow-lg shadow-slate-300">
+                    <i data-lucide="activity" class="w-6 h-6 text-emerald-400"></i>
+                </div>
+                <div>
+                    <h1 class="text-2xl md:text-3xl font-black text-slate-900 tracking-tight italic">台電全方位戰情中心</h1>
+                    <p class="text-slate-500 text-xs md:text-sm font-medium flex items-center gap-2 mt-0.5">
+                        <span class="inline-block w-2 h-2 rounded-full bg-emerald-500 status-pulse"></span>
+                        即時監控 & 趨勢分析整合版
+                    </p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="w-full md:w-auto flex flex-wrap items-stretch justify-between md:justify-end gap-3">
+            <div class="bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-sm flex flex-col justify-center text-center min-w-[110px]">
+                <div class="text-[9px] text-slate-400 uppercase font-bold tracking-wider">NEXT UPDATE</div>
+                <div id="countdown" class="text-xl font-mono font-bold text-blue-600 leading-none mt-0.5">10:00</div>
+            </div>
+            <button id="refreshBtn" onclick="refreshAllData()" class="px-5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-lg shadow-slate-200 transition-all active:scale-95 flex items-center gap-2 group">
+                <i data-lucide="refresh-cw" class="w-4 h-4 group-hover:rotate-180 transition-transform duration-700"></i>
+                <span class="text-sm font-bold">同步數據</span>
+            </button>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-5">
+        
+        <!-- KPI Cards -->
+        <section class="lg:col-span-12 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-5">
+            <div class="light-card p-4 md:p-5 border-l-4 border-l-blue-500 relative overflow-hidden group">
+                <div class="absolute right-[-10px] top-[-10px] opacity-5 transform rotate-12 group-hover:scale-110 transition-transform"><i data-lucide="zap" class="w-24 h-24"></i></div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">目前總發電量</p>
+                <div class="flex items-baseline gap-1.5">
+                    <span id="totalGen" class="text-2xl md:text-3xl font-black text-slate-900 font-mono">--</span>
+                    <span class="text-slate-400 text-xs font-bold">MW</span>
+                </div>
+            </div>
+            <div class="light-card p-4 md:p-5 border-l-4 border-l-amber-500 relative overflow-hidden group">
+                <div class="absolute right-[-10px] top-[-10px] opacity-5 transform rotate-12 group-hover:scale-110 transition-transform"><i data-lucide="gauge" class="w-24 h-24"></i></div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">系統負載率 (估)</p>
+                <div class="flex items-baseline gap-1.5">
+                    <span id="avgLoad" class="text-2xl md:text-3xl font-black text-amber-600 font-mono">--%</span>
+                </div>
+            </div>
+            <div class="light-card p-4 md:p-5 border-l-4 border-l-emerald-500 relative overflow-hidden group">
+                <div class="absolute right-[-10px] top-[-10px] opacity-5 transform rotate-12 group-hover:scale-110 transition-transform"><i data-lucide="leaf" class="w-24 h-24"></i></div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">綠能總發電量</p>
+                <div class="flex items-baseline gap-1.5">
+                    <span id="greenGen" class="text-2xl md:text-3xl font-black text-emerald-600 font-mono">--</span>
+                    <span class="text-slate-400 text-xs font-bold">MW</span>
+                </div>
+            </div>
+            <div class="light-card p-4 md:p-5 border-l-4 border-l-purple-500 relative overflow-hidden group">
+                <div class="absolute right-[-10px] top-[-10px] opacity-5 transform rotate-12 group-hover:scale-110 transition-transform"><i data-lucide="battery-charging" class="w-24 h-24"></i></div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">綠能佔比(RE%)</p>
+                <div class="flex items-baseline gap-1.5">
+                    <span id="renewRatioLabel" class="text-2xl md:text-3xl font-black text-purple-600 font-mono">--%</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Energy Mix (Pie Chart) -->
+        <!-- 修改: 將 col-span-4 改為 col-span-12，橫跨整列 -->
+        <section id="section-energy-mix" class="lg:col-span-12 light-card p-1 flex flex-col overflow-hidden">
+            <div class="px-5 py-3 border-b border-slate-100 flex justify-between items-center bg-white rounded-t-2xl cursor-pointer hover:bg-slate-50 transition-colors" onclick="toggleSection('section-energy-mix')">
+                <div class="flex items-center gap-2">
+                    <div class="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg"><i data-lucide="pie-chart" class="w-4 h-4"></i></div>
+                    <h3 class="font-bold text-slate-800 text-sm md:text-base">即時能源結構</h3>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div id="pie-timestamp" class="text-[10px] font-mono text-slate-400 font-bold bg-slate-50 px-2 py-1 rounded border border-slate-100">更新中...</div>
+                    <button class="p-1 text-slate-400 hover:text-blue-600 transition-colors"><i data-lucide="chevron-up" class="w-5 h-5 toggle-icon"></i></button>
+                </div>
+            </div>
+            <div class="collapsible-content">
+                <div class="p-4 flex flex-col justify-center items-center relative min-h-[320px]">
+                    <div class="relative w-full h-full flex justify-center items-center max-w-lg mx-auto"> <!-- 增加 max-w-lg 限制圓餅圖過大 -->
+                        <canvas id="generationChart"></canvas>
+                        <!-- 中心輪播數值 -->
+                        <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none pb-2">
+                            <!-- 標題固定為黑色 -->
+                            <span id="centerLabel" class="text-slate-900 text-[11px] font-bold tracking-widest mb-1 transition-opacity duration-300">更新中...</span>
+                            <span id="centerValue" class="text-3xl md:text-4xl font-black font-mono tracking-tighter transition-opacity duration-300">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Map Section -->
+        <section id="section-map" class="lg:col-span-12 light-card overflow-hidden flex flex-col">
+            <div class="px-5 py-3 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 cursor-pointer hover:bg-slate-100 transition-colors" onclick="toggleSection('section-map')">
+                <div class="flex items-center gap-2">
+                    <div class="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg"><i data-lucide="map" class="w-4 h-4"></i></div>
+                    <h3 class="font-bold text-slate-800 text-sm md:text-base">全台機組地理分佈圖</h3>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-[10px] text-slate-400 hidden sm:inline">懸停查看詳細圖卡</span>
+                    <button class="p-1 text-slate-400 hover:text-blue-600 transition-colors"><i data-lucide="chevron-up" class="w-5 h-5 toggle-icon"></i></button>
+                </div>
+            </div>
+            <div class="collapsible-content h-[500px] md:h-[650px] relative bg-slate-100">
+                <div id="mapContainer" class="w-full h-full z-0"></div>
+            </div>
+        </section>
+
+        <!-- Unit List Table -->
+        <section id="section-list" class="lg:col-span-12 light-card overflow-hidden">
+            <div class="px-5 py-3 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 cursor-pointer hover:bg-slate-100 transition-colors" onclick="toggleSection('section-list')">
+                <div class="flex items-center gap-2">
+                    <div class="p-1.5 bg-slate-200 text-slate-600 rounded-lg"><i data-lucide="list" class="w-4 h-4"></i></div>
+                    <h3 class="font-bold text-slate-800 text-sm md:text-base">各機組詳細運行清單</h3>
+                </div>
+                <div class="flex items-center gap-4" onclick="event.stopPropagation()">
+                    <div class="relative w-48 md:w-64 hidden sm:block">
+                        <input type="text" id="searchInput" placeholder="搜尋機組名稱..." class="w-full bg-white border border-slate-200 rounded-lg py-1.5 px-3 pl-9 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                        <i data-lucide="search" class="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400"></i>
+                    </div>
+                    <button class="p-1 text-slate-400 hover:text-blue-600 transition-colors" onclick="toggleSection('section-list')"><i data-lucide="chevron-up" class="w-5 h-5 toggle-icon"></i></button>
+                </div>
+            </div>
+            <div class="collapsible-content">
+                <div class="table-container overflow-x-auto max-h-[600px]">
+                    <table class="w-full text-left text-sm">
+                        <thead class="sticky top-0 bg-white shadow-sm z-10">
+                            <tr class="text-slate-500 border-b border-slate-200 whitespace-nowrap uppercase text-[11px] tracking-wider bg-slate-50/80 backdrop-blur">
+                                <th class="px-6 py-3 font-bold">類型</th>
+                                <th class="px-6 py-3 font-bold">機組名稱</th>
+                                <th class="px-6 py-3 font-bold text-right">即時出力 (MW)</th>
+                                <th class="px-6 py-3 font-bold text-right hidden sm:table-cell">裝置容量 (MW)</th>
+                                <th class="px-6 py-3 font-bold text-center">負載率</th>
+                            </tr>
+                        </thead>
+                        <tbody id="unitTableBody" class="divide-y divide-slate-100 text-slate-800 font-mono text-xs md:text-sm"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer / Logs / Notes -->
+        <section class="lg:col-span-12 w-full">
+            <!-- Official Notes -->
+            <div class="light-card p-6 bg-slate-50/80">
+                <h3 class="text-sm font-black text-slate-700 mb-5 flex items-center gap-2 border-b border-slate-200 pb-3">
+                    <i data-lucide="file-text" class="w-4 h-4 text-blue-600"></i> 系統數據與業務執行說明 (官方完整版)
+                </h3>
+                <div id="notesContainer" class="h-80 overflow-y-auto pr-3 custom-scrollbar">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        
+                        <div id="note-1" class="note-item">
+                            <span class="note-title">註1：裝置容量</span>
+                            <p class="note-content">通常以構成該機組之原動機或發電機之設計容量(名牌所列發定額容量)稱之（取用二者中較小者）。民營電廠依購售電合約，以各機組之簽約容量計。</p>
+                        </div>
+
+                        <div id="note-2" class="note-item">
+                            <span class="note-title">註2：淨發電量</span>
+                            <p class="note-content">發電廠發電機所產生之電能，電力系統上屬於公司發電廠之輸出電能。(廠毛發電量 - 廠內用電)</p>
+                        </div>
+
+                        <div id="note-3" class="note-item">
+                            <span class="note-title">註3：淨發電量高於裝置容量之說明</span>
+                            <p class="note-content">
+                                (1) 部分火力機組因機組配件升級、環境溫度較低、機組效能測試等因素之影響，致使發電可能高於裝置容量，惟大多屬短暫性現象。<br>
+                                (2) 本公司所購入汽電共生係為餘電收購，其中垃圾及沼氣計入裝置容量，其餘不計入本公司系統裝置容量。
+                            </p>
+                        </div>
+
+                        <div id="note-4" class="note-item">
+                            <span class="note-title">註4：離島區域定義說明</span>
+                            <p class="note-content">
+                                澎湖尖山、金門塔山、馬祖珠山、離島其他（含蘭嶼、綠島、小琉球、連江縣[馬祖]離島及澎湖縣離島等電廠）。<br>
+                                <span class="text-blue-600 font-bold">※顯示之發電量為毛發電量。</span>
+                            </p>
+                        </div>
+
+                        <div id="note-5" class="note-item">
+                            <span class="note-title">註5：核能電廠說明</span>
+                            <p class="note-content">核能電廠全黑起動氣渦輪機，其裝置容量不計入台電系統，發電量計入燃油(輕油)發電。</p>
+                        </div>
+
+                        <div id="note-6" class="note-item">
+                            <span class="note-title">註6：小水力名單</span>
+                            <p class="note-content">北部：圓山等；中部：后里等；南部：六龜等；東部：銅門等。</p>
+                        </div>
+
+                        <div id="note-7" class="note-item">
+                            <span class="note-title">註7：太陽能購電</span>
+                            <p class="note-content">所顯示之發電量係參考購電取樣發發電量分區比例估算得出。</p>
+                        </div>
+
+                        <div id="note-8" class="note-item">
+                            <span class="note-title text-slate-400">註8：無即時資訊</span>
+                            <p class="note-content">標示為 N/A 表示目前無即時資訊。</p>
+                        </div>
+
+                        <div id="note-9" class="note-item">
+                            <span class="note-title text-slate-400">註9：更新頻率</span>
+                            <p class="note-content">本網頁資料為每 10 分鐘自動同步更新一次。</p>
+                        </div>
+
+                        <div id="note-10" class="note-item">
+                            <span class="note-title">註10：測試程序說明</span>
+                            <p class="note-content">機組換發執照前進行測試程序時，暫不計入裝置容量。</p>
+                        </div>
+
+                        <div id="note-11" class="note-item col-span-1 md:col-span-2">
+                            <span class="note-title">註11：備註欄補充說明</span>
+                            <div class="note-content grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 mt-1">
+                                <span>(1) 水文限制</span><span>(2) 燃料限制</span><span>(3) 環保限制</span>
+                                <span>(4) 空污減載</span><span>(5) 環保停機</span><span>(6) 運轉限制</span>
+                                <span>(7) EOH限制</span><span>(8) 部分歲修</span><span>(9) 部分檢修</span>
+                                <span>(10) 部分故障</span><span>(11) 合約限制</span><span>(12) 電源線限制</span>
+                                <span>(13) 機組安檢</span><span>(14) 輔機檢修</span><span>(15) 外溫高限制</span>
+                                <span>(16) 歲修逾排程</span><span>(17) 測試停機</span><span>(18) 測試運轉</span>
+                            </div>
+                        </div>
+
+                        <div id="note-12" class="note-item">
+                            <span class="note-title">註12：興達#4機說明</span>
+                            <p class="note-content">興達#4機自113年起第一、四季不運轉，114年起轉為備用機組。</p>
+                        </div>
+
+                        <div id="note-13" class="note-item">
+                            <span class="note-title">註13：資料呈現準則</span>
+                            <p class="note-content">裝置容量 20MW 以上且併接 69kV 以上之機組單獨呈現。</p>
+                        </div>
+
+                        <div id="note-14" class="note-item border-l-4 border-l-red-400 pl-3">
+                            <span class="note-title text-red-700">註14：大林除役資訊</span>
+                            <p class="note-content text-red-600">大林#5機 111/12/31 除役並轉為緊急備用設施。</p>
+                        </div>
+
+                        <div id="note-15" class="note-item border-l-4 border-l-red-400 pl-3">
+                            <span class="note-title text-red-700">註15：興達除役資訊</span>
+                            <p class="note-content text-red-600">興達#1、#2、#3 分別於 112、114 年除役並轉為緊急備用設施。</p>
+                        </div>
+
+                        <div id="note-16" class="note-item border-l-4 border-l-blue-400 pl-3">
+                            <span class="note-title text-blue-700">註16：電池儲能定義</span>
+                            <p class="note-content text-blue-600">電池係指「能量型電池儲能」，裝置容量係指電力交易平台之得標容量。</p>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="max-w-7xl mx-auto mt-8 text-center text-slate-400 text-[10px] font-mono pb-6">
+        數據來源：台灣電力公司各機組發電量即時資訊 | Copyright © 2026 ITRI 能源查核團隊 CW
+    </footer>
+
+    <script>
+        // --- 設定與常數 ---
+        const API_JSON_URL = 'https://service.taipower.com.tw/data/opendata/apply/file/d006001/001.json';
+        // (移除 API_CSV_URL)
+        
+        // 擴充的 Proxy 清單
+        const PROXIES = [
+            { name: 'AllOrigins', url: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
+            { name: 'CorsProxyIO', url: (u) => `https://corsproxy.io/?${encodeURIComponent(u)}` },
+            { name: 'CodeTabs', url: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
+            { name: 'CorsProxyOrg', url: (u) => `https://corsproxy.org/?${encodeURIComponent(u)}` }
+        ];
+
+        const PLANT_COORDS = {
+            '林口': [25.122, 121.328], '台中': [24.213, 120.481], '興達': [22.853, 120.191],
+            '大林': [22.540, 120.334], '大潭': [25.032, 121.042], '通霄': [24.491, 120.672],
+            '南部': [22.605, 120.301], '協和': [25.155, 121.737], '核二': [25.202, 121.663],
+            '核三': [21.958, 120.751], '和平': [24.307, 121.751], '麥寮': [23.797, 120.187],
+            '德基': [24.254, 121.162], '青山': [24.255, 121.200], '翡翠': [24.912, 121.571],
+            '新桃': [24.811, 120.985], '嘉惠': [23.450, 120.485], '豐德': [24.6, 121.0], 
+            '星元': [24.1, 120.4], '國光': [24.9, 121.2], '海湖': [25.1, 121.3],
+            '風力': [24.580, 120.750], '太陽': [23.500, 120.250]
+        };
+
+        const COLORS = { 
+            '核能': '#ef4444', '燃煤': '#334155', '燃氣': '#f59e0b', '汽電共生': '#d97706',
+            '水力': '#3b82f6', '風力': '#10b981', '太陽': '#fbbf24', '太陽能': '#fbbf24', 
+            '再生': '#059669', '燃油': '#64748b', '輕油': '#94a3b8', '重油': '#475569', 
+            '抽蓄': '#6366f1', '儲能': '#8b5cf6', '其他': '#cbd5e1' 
+        };
+
+        // (移除 FUEL_NAMES_CSV)
+
+        // 全域變數
+        let mapInstance = null, markerLayer = null;
+        let pieChart = null; // (移除 lineChart)
+        let countdownSec = 600, countdownTimer = null;
+        let totalGenerationAll = 0;
+        let pieInterval = null; // 圓餅圖輪播計時器
+
+        // --- 工具函式 ---
+        function log(msg, type = 'info') {
+            // System Log UI 已移除，改為 console 輸出以利除錯
+            console.log(`[${type.toUpperCase()}] ${msg}`);
+        }
+
+        function parseValue(v) { 
+            if (!v || v === '-' || v === 'N/A') return 0; 
+            return parseFloat(String(v).split('(')[0].replace(/[^\d.-]/g, '')) || 0; 
+        }
+
+        function toggleSection(id) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.classList.toggle('collapsed');
+                if (id === 'section-map' && !el.classList.contains('collapsed')) {
+                    setTimeout(() => mapInstance.invalidateSize(), 400);
+                }
+            }
+        }
+
+        // --- 核心邏輯：雙重數據獲取 ---
+        async function refreshAllData() {
+            const btn = document.getElementById('refreshBtn');
+            const icon = btn.querySelector('i');
+            icon.classList.add('animate-spin');
+            
+            log('開始同步所有數據...');
+            resetCountdown();
+            
+            // 僅處理即時機組數據請求 (移除 fetchDailyLoadCsv)
+            await fetchRealTimeJson();
+            
+            icon.classList.remove('animate-spin');
+            
+            // 隱藏初始 Loader
+            const loader = document.getElementById('initialLoaderOverlay');
+            if (loader) {
+                loader.style.opacity = '0';
+                setTimeout(() => loader.style.display = 'none', 500);
+            }
+        }
+
+        // 1. 獲取即時機組狀態 (JSON)
+        async function fetchRealTimeJson() {
+            log('正在請求即時機組數據 (JSON)...');
+            let success = false;
+            
+            for (let proxy of PROXIES) {
+                try {
+                    const res = await fetch(proxy.url(API_JSON_URL));
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    
+                    let data;
+                    const text = await res.text();
+                    try { data = JSON.parse(text); } 
+                    catch { if (text.includes('contents')) data = JSON.parse(text).contents; }
+                    
+                    if (data && data.contents) data = JSON.parse(data.contents);
+                    
+                    if (data && data.aaData) {
+                        renderRealTimeDashboard(data.aaData, data.DateTime || new Date().toLocaleString());
+                        log(`即時數據同步成功 (${proxy.name})`, 'success');
+                        success = true;
+                        break;
+                    }
+                } catch (e) {
+                    log(`Proxy ${proxy.name} JSON 失敗: ${e.message}`, 'warning');
+                }
+            }
+
+            if (!success) {
+                log('即時數據全線連線失敗，無法更新機組列表', 'error');
+            }
+        }
+
+        // (移除 fetchDailyLoadCsv)
+
+        // --- 渲染邏輯 ---
+
+        // 渲染即時看板 (KPI, Pie Chart, Table, Map)
+        function renderRealTimeDashboard(data, updateTime) {
+            const tableBody = document.getElementById('unitTableBody');
+            tableBody.innerHTML = '';
+            
+            let totals = { gen: 0, cap: 0, green: 0, solar: 0, wind: 0, hydro: 0 };
+            let groups = {};
+
+            data.forEach(item => {
+                const rawName = item['機組名稱'] || '';
+                if (rawName.includes('計')) return; 
+
+                const type = item['機組類型'] || '其他';
+                const cap = parseValue(item['裝置容量(MW)']);
+                const gen = parseValue(item['淨發電量(MW)']);
+                
+                // 統計
+                totals.gen += gen;
+                totals.cap += cap;
+                // 更寬鬆的綠能判斷，確保水力、風力、太陽、再生都算入
+                if (['水力', '風力', '太陽', '再生', '綠能'].some(k => type.includes(k) || rawName.includes(k))) totals.green += gen;
+                
+                // 分組給圓餅圖
+                let groupKey = '其他';
+                for (const k in COLORS) {
+                    if (type.includes(k) || rawName.includes(k)) { groupKey = k; break; }
+                }
+                groups[groupKey] = (groups[groupKey] || 0) + gen;
+
+                // 渲染表格行
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-blue-50/50 transition-colors group border-b border-slate-50 last:border-0';
+                const load = cap > 0 ? (gen/cap*100).toFixed(1) : 0;
+                
+                let displayName = rawName.replace(/\(註(\d+)\)/, '<a href="#note-$1" class="text-blue-500 hover:underline text-[10px] ml-1 font-bold">(註$1)</a>');
+
+                tr.innerHTML = `
+                    <td class="px-6 py-3 whitespace-nowrap"><span class="text-[10px] px-2 py-0.5 rounded font-bold border whitespace-nowrap ${getBadgeClass(type)}">${type.substring(0,4)}</span></td>
+                    <td class="px-6 py-3 font-bold text-slate-700">${displayName}</td>
+                    <td class="px-6 py-3 text-right font-mono font-bold ${gen > 0 ? 'text-blue-600' : 'text-slate-400'}">${Math.round(gen).toLocaleString()}</td>
+                    <td class="px-6 py-3 text-right font-mono text-slate-400 hidden sm:table-cell text-xs">${Math.round(cap).toLocaleString()}</td>
+                    <td class="px-6 py-3 text-center font-mono font-bold ${load > 95 ? 'text-red-500' : (load < 10 && gen > 0 ? 'text-amber-500' : 'text-slate-600')}">${load}%</td>`;
+                tableBody.appendChild(tr);
+            });
+
+            // 更新 KPI 卡片
+            totalGenerationAll = totals.gen;
+            document.getElementById('totalGen').innerText = Math.round(totals.gen).toLocaleString();
+            document.getElementById('avgLoad').innerText = (totals.gen/totals.cap*100).toFixed(1)+'%';
+            document.getElementById('greenGen').innerText = Math.round(totals.green).toLocaleString();
+            const greenRatio = (totals.green/totals.gen*100).toFixed(1);
+            document.getElementById('renewRatioLabel').innerText = greenRatio + '%';
+            
+            // 處理右上角時間 (統一格式 YYYY/MM/DD HH:mm)
+            // updateTime 可能是 "2023-10-27 10:20:00" 或類似格式
+            let dateObj = new Date(updateTime);
+            if (isNaN(dateObj.getTime())) {
+                dateObj = new Date(); // Fallback if parsing fails
+            }
+            const pYear = dateObj.getFullYear();
+            const pMonth = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+            const pDay = dateObj.getDate().toString().padStart(2, '0');
+            const pHour = dateObj.getHours().toString().padStart(2, '0');
+            const pMin = dateObj.getMinutes().toString().padStart(2, '0');
+            const formattedPieTime = `${pYear}/${pMonth}/${pDay} ${pHour}:${pMin}`;
+
+            document.getElementById('pie-timestamp').innerText = `DATA: ${formattedPieTime}`;
+
+            // 啟動中心輪播
+            initPieCarousel({
+                gen: totals.gen,
+                cap: totals.cap,
+                green: totals.green
+            });
+            
+            updatePieChart(groups);
+            updateMapMarkers(data, totals.gen); // 傳入總發電量以計算百分比
+            lucide.createIcons();
+        }
+
+        // 輪播邏輯
+        function initPieCarousel(data) {
+            if (pieInterval) clearInterval(pieInterval);
+            
+            const labelEl = document.getElementById('centerLabel');
+            const valueEl = document.getElementById('centerValue');
+            
+            // 依序輪播：總發電量(黑)、負載率(橘)、綠能(綠)、綠能佔比(紫)
+            // 顏色必須對應上方 KPI 卡片
+            const slides = [
+                { label: '目前總發電量', value: Math.round(data.gen).toLocaleString(), unit: 'MW', color: 'text-slate-900' },
+                { label: '系統負載率 (估)', value: (data.gen / data.cap * 100).toFixed(1), unit: '%', color: 'text-amber-600' },
+                { label: '綠能總發電量', value: Math.round(data.green).toLocaleString(), unit: 'MW', color: 'text-emerald-600' },
+                { label: '綠能占比', value: (data.green / data.gen * 100).toFixed(1), unit: '%', color: 'text-purple-600' }
+            ];
+
+            let index = 0;
+            
+            const updateDisplay = () => {
+                const item = slides[index];
+                
+                // Fade Out
+                labelEl.style.opacity = '0';
+                valueEl.style.opacity = '0';
+                
+                setTimeout(() => {
+                    // Update Content
+                    labelEl.innerText = item.label;
+                    valueEl.innerText = item.value + (item.unit === '%' ? '%' : '');
+                    
+                    // Update Color class (keep base classes)
+                    valueEl.className = `text-3xl md:text-4xl font-black font-mono tracking-tighter transition-opacity duration-300 ${item.color}`;
+                    
+                    // Fade In
+                    labelEl.style.opacity = '1';
+                    valueEl.style.opacity = '1';
+                }, 300); // Wait for fade out
+
+                index = (index + 1) % slides.length;
+            };
+
+            // 立即執行一次
+            updateDisplay();
+            
+            // 設定排程 (每 4 秒換一次)
+            pieInterval = setInterval(updateDisplay, 4000);
+        }
+
+        // (移除 parseAndRenderCsv)
+
+        // --- 圖表更新 ---
+        
+        function updatePieChart(groups) {
+            const ctx = document.getElementById('generationChart');
+            if (pieChart) pieChart.destroy();
+            
+            const labels = Object.keys(groups).filter(k => groups[k] > 0);
+            const data = labels.map(l => groups[l]);
+            const bgColors = labels.map(l => COLORS[l] || COLORS['其他']);
+
+            pieChart = new Chart(ctx, {
+                type: 'doughnut', 
+                data: { 
+                    labels: labels, 
+                    datasets: [{ 
+                        data: data, 
+                        backgroundColor: bgColors, 
+                        borderWidth: 0, // 移除邊框符合參考圖
+                        hoverOffset: 15,
+                    }] 
+                },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    cutout: '80%', // 讓甜甜圈更細
+                    plugins: { 
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1e293b',
+                            padding: 12,
+                            cornerRadius: 8,
+                            titleFont: { family: 'Noto Sans TC' },
+                            bodyFont: { family: 'JetBrains Mono' },
+                            displayColors: true,
+                            boxWidth: 8,
+                            callbacks: {
+                                label: (ctx) => ` ${ctx.label}: ${Math.round(ctx.raw).toLocaleString()} MW (${((ctx.raw/totalGenerationAll)*100).toFixed(1)}%)`
+                            }
+                        }
+                    } 
+                }
+            });
+        }
+
+        // (移除 updateLineChart)
+
+        // --- 地圖邏輯 (更新 Popup 樣式) ---
+        function initMap() {
+            if (mapInstance) return;
+            mapInstance = L.map('mapContainer', { 
+                zoomControl: false, 
+                attributionControl: false,
+                scrollWheelZoom: false // Disable scroll wheel zoom
+            }).setView([23.7, 120.95], 7);
+            
+            // 使用 OpenStreetMap 標準圖層以顯示繁體中文地名
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(mapInstance);
+            
+            L.control.zoom({ position: 'bottomright' }).addTo(mapInstance);
+        }
+
+        function updateMapMarkers(data, totalGen) {
+            if (!mapInstance) return;
+            if (markerLayer) mapInstance.removeLayer(markerLayer);
+            markerLayer = L.layerGroup().addTo(mapInstance);
+            
+            const plantStats = {};
+            data.forEach(item => {
+                const name = item['機組名稱'] || '';
+                const type = item['機組類型'] || '';
+                const gen = parseValue(item['淨發電量(MW)']);
+                const cap = parseValue(item['裝置容量(MW)']);
+                
+                let matchedKey = null;
+                for (const k in PLANT_COORDS) {
+                    if (name.includes(k) || type.includes(k)) { matchedKey = k; break; }
+                }
+
+                if (matchedKey) {
+                    if (!plantStats[matchedKey]) plantStats[matchedKey] = { gen: 0, cap: 0, type: type || matchedKey };
+                    plantStats[matchedKey].gen += gen;
+                    plantStats[matchedKey].cap += cap;
+                }
+            });
+
+            for (const k in plantStats) {
+                const p = plantStats[k];
+                if (p.gen <= 0) continue; 
+                
+                let color = '#94a3b8';
+                for (const cKey in COLORS) if (p.type.includes(cKey)) { color = COLORS[cKey]; break; }
+
+                // 計算數據
+                const percent = (p.gen / totalGen * 100).toFixed(1);
+                const load = p.cap > 0 ? (p.gen / p.cap * 100).toFixed(1) : 0;
+                const loadColor = load > 90 ? 'text-red-500' : (load > 70 ? 'text-emerald-500' : 'text-slate-500');
+
+                // 光暈大小
+                const size = Math.min(80, 24 + Math.sqrt(p.gen) * 1.2);
+                
+                const icon = L.divIcon({
+                    className: 'custom-div-icon',
+                    html: `
+                        <div style="position:relative; width:${size}px; height:${size}px; display:flex; align-items:center; justify-content:center;">
+                            <div class="status-pulse" style="position:absolute; inset:0; background:${color}; opacity:0.25; border-radius:50%;"></div>
+                            <div style="width:14px; height:14px; background:${color}; border:2px solid white; border-radius:50%; box-shadow:0 4px 6px rgba(0,0,0,0.1); z-index:10;"></div>
+                        </div>
+                    `,
+                    iconSize: [size, size],
+                    iconAnchor: [size/2, size/2]
+                });
+
+                // 重製 Popup 樣式 (參考圖卡)
+                const popupContent = `
+                    <div class="bg-white font-sans overflow-hidden">
+                        <div class="px-5 py-4 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
+                            <h4 class="font-bold text-slate-800 text-base tracking-tight">${k}</h4>
+                            <span class="text-[10px] px-2 py-0.5 bg-white border border-slate-200 rounded text-slate-500 font-bold shadow-sm">${p.type}</span>
+                        </div>
+                        <div class="p-5">
+                            <div class="mb-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest">POWER PLANT STATUS</div>
+                            
+                            <div class="mb-4">
+                                <div class="text-[10px] text-slate-400 font-bold mb-0.5">即時淨發電量</div>
+                                <div class="flex items-baseline gap-1.5">
+                                    <span class="text-3xl font-black font-mono text-blue-600 tracking-tighter">${Math.round(p.gen).toLocaleString()}</span>
+                                    <span class="text-xs text-slate-400 font-bold">MW</span>
+                                </div>
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-4 pt-3 border-t border-slate-100">
+                                <div>
+                                    <div class="text-[9px] text-slate-400 font-bold uppercase mb-0.5">發電佔比</div>
+                                    <div class="text-sm font-bold text-slate-700 font-mono">${percent}%</div>
+                                </div>
+                                <div class="border-l border-slate-100 pl-4">
+                                    <div class="text-[9px] text-slate-400 font-bold uppercase mb-0.5">負載率</div>
+                                    <div class="text-sm font-black font-mono ${loadColor}">${load}%</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                const marker = L.marker(PLANT_COORDS[k], { icon: icon })
+                    .bindPopup(popupContent, { minWidth: 260, maxWidth: 260 })
+                    .addTo(markerLayer);
+
+                // Add hover interactions
+                marker.on('mouseover', function() { this.openPopup(); });
+                marker.on('mouseout', function() { this.closePopup(); });
+            }
+        }
+
+        function getBadgeClass(t) {
+            if(t.includes('核能')) return 'bg-red-50 text-red-700 border-red-100';
+            if(t.includes('燃氣')) return 'bg-amber-50 text-amber-700 border-amber-100';
+            if(t.includes('綠能') || t.includes('再生') || t.includes('水力') || t.includes('風力') || t.includes('太陽')) return 'bg-emerald-50 text-emerald-700 border-emerald-100';
+            return 'bg-slate-50 text-slate-700 border-slate-200';
+        }
+
+        function resetCountdown() { countdownSec = 600; }
+        
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            const val = e.target.value.toLowerCase();
+            document.querySelectorAll('#unitTableBody tr').forEach(row => {
+                row.style.display = row.innerText.toLowerCase().includes(val) ? '' : 'none';
+            });
+        });
+
+        window.onload = () => {
+            initMap();
+            refreshAllData();
+            setInterval(() => {
+                countdownSec--;
+                const m = Math.floor(countdownSec/60);
+                const s = countdownSec%60;
+                const el = document.getElementById('countdown');
+                if (el) el.innerText = `${m}:${s.toString().padStart(2, '0')}`;
+                if (countdownSec <= 0) refreshAllData();
+            }, 1000);
+        };
+    </script>
+</body>
+</html>
