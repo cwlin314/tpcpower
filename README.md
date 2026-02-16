@@ -245,6 +245,6 @@ Give the repository a ⭐ and share it with the open energy community.
 
 ---
 
-## 🌏 Preview
+## 💡 Preview
 
 <img width="2671" height="4855" alt="tpc" src="https://github.com/user-attachments/assets/0e50a8a7-81d7-4146-b623-9889206a2bd3" />
