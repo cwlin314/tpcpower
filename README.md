@@ -1,7 +1,5 @@
 # TPC Power Dashboard - Integrated Monitoring System
 
-![Project Preview](preview_mockup.png)
-
 > **Real-time Monitoring, Trend Analysis, All-in-One Dashboard.**
 > This project is a high-end power monitoring dashboard built with traditional web technologies, designed to provide real-time visualization of Taiwan's electricity generation data.
 
